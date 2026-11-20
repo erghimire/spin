@@ -402,7 +402,7 @@
             type="text"
             class="search-input"
             id="refSearch"
-            placeholder="Search reference table by name or last digits..."
+            placeholder="Search reference table by name or first 4 digits..."
             oninput="renderReferenceTable()"
           >
           <div class="table-wrap">
@@ -410,7 +410,7 @@
               <thead>
                 <tr>
                   <th>Name</th>
-                  <th>Phone (Masked)</th>
+                  <th>Phone (First 4)</th>
                   <th>Status</th>
                 </tr>
               </thead>
@@ -486,12 +486,7 @@
   </div>
 
 <script>
-  const SYNC_ENDPOINT = "https://script.google.com/macros/s/AKfycbwBN8A4n9UK2qruUtSSxcRqUe048oBoosOl3oLQVIv-eVQSTNZFXMtqH5-Nb_Yuzm2C/exec";
-
-  // Fallback reference table if your Apps Script GET does not return allowedUsers yet
-  const DEFAULT_REFERENCE_USERS = [
-    { name: "Alisha Thapa", phone: "+61452024209" }
-  ];
+  const SYNC_ENDPOINT = "https://script.google.com/macros/s/AKfycbxuP_pD5Z-AX9Cnpvuy6Asl3bS8IhX7zLjzbdWAlFwX54nZaGtbuyY872IY6_LlUGpg/exec";
 
   const ALL_MONTHS = [
     "January", "February", "March", "April",
@@ -523,10 +518,11 @@
   }
 
   function maskPhone(phone) {
-  const clean = normPhone(phone);
-  if (!clean) return "—";
-  return clean.slice(0, 4) + "***";
-}
+    const clean = normPhone(phone);
+    if (!clean) return "—";
+    return clean.slice(0, 4) + "***";
+  }
+
   function getEntries() {
     return Object.values(entriesByPhone || {});
   }
@@ -536,7 +532,6 @@
     return ALL_MONTHS.filter(m => !taken.has(m.toLowerCase()));
   }
 
-  // Matches ONLY when BOTH Name and Phone match the SAME reference record
   function findMatchedReference(rawName, rawPhone) {
     const nName = normName(rawName);
     const nPhone = normPhone(rawPhone);
@@ -549,8 +544,13 @@
     }) || null;
   }
 
-  function hasAlreadySpun(phoneKey) {
-    return Boolean(entriesByPhone[phoneKey]);
+  function findExistingAssignment(matchedUser) {
+    const phoneKey = normPhone(matchedUser.phoneKey || matchedUser.phone);
+    if (entriesByPhone[phoneKey]) {
+      return entriesByPhone[phoneKey];
+    }
+    const targetName = normName(matchedUser.name);
+    return getEntries().find(e => normName(e.name) === targetName) || null;
   }
 
   function validateCurrentInput() {
@@ -581,14 +581,13 @@
       return;
     }
 
-    const phoneKey = normPhone(matched.phoneKey || matched.phone);
-    if (hasAlreadySpun(phoneKey)) {
-      const existing = entriesByPhone[phoneKey];
-      badge.textContent = "Already Spun";
+    const existing = findExistingAssignment(matched);
+    if (existing) {
+      badge.textContent = "Already Assigned";
       badge.className = "badge";
       spinBtn.disabled = true;
       spinBtn.textContent = "ALREADY ASSIGNED";
-      errEl.textContent = `${matched.name} (${maskPhone(matched.phone)}) already spun and received ${existing.month}.`;
+      errEl.textContent = `You already assigned for ${existing.month}.`;
       return;
     }
 
@@ -608,7 +607,6 @@
     spinBtn.textContent = "SPIN WHEEL";
   }
 
-  // Clicking a row ONLY highlights it; it never fills another person's details
   function highlightReferenceRow(rowKey) {
     if (isSpinning) return;
     selectedRowKey = selectedRowKey === rowKey ? "" : rowKey;
@@ -626,13 +624,8 @@
 
     const filtered = referenceUsers.filter(u => {
       if (!query) return true;
-      const fullPhone = normPhone(u.phoneKey || u.phone);
-      const masked = normName(maskPhone(u.phone));
-      return (
-        normName(u.name).includes(query) ||
-        fullPhone.includes(query) ||
-        masked.includes(query)
-      );
+      const shownPhone = normName(maskPhone(u.phone));
+      return normName(u.name).includes(query) || shownPhone.includes(query);
     });
 
     body.innerHTML = "";
@@ -645,7 +638,7 @@
 
     filtered.forEach((u, idx) => {
       const pKey = normPhone(u.phoneKey || u.phone) || `row-${idx}`;
-      const done = hasAlreadySpun(pKey);
+      const done = Boolean(findExistingAssignment(u));
       const isActive = pKey && pKey === activeKey;
       const isSelected = pKey === selectedRowKey;
 
@@ -658,7 +651,7 @@
       tr.innerHTML = `
         <td>${esc(u.name)}</td>
         <td>${esc(maskPhone(u.phone))}</td>
-        <td><span class="status-pill ${done ? "status-done" : "status-ready"}">${done ? "Spun" : "Eligible"}</span></td>
+        <td><span class="status-pill ${done ? "status-done" : "status-ready"}">${done ? "Assigned" : "Eligible"}</span></td>
       `;
       body.appendChild(tr);
     });
@@ -687,7 +680,7 @@
   }
 
   async function initData() {
-    referenceUsers = [...DEFAULT_REFERENCE_USERS];
+    referenceUsers = [];
     entriesByPhone = {};
 
     if (SYNC_ENDPOINT && SYNC_ENDPOINT.startsWith("http")) {
@@ -695,7 +688,7 @@
         const res = await fetch(SYNC_ENDPOINT, { method: "GET" });
         const data = await res.json();
         if (data && data.ok) {
-          if (Array.isArray(data.allowedUsers) && data.allowedUsers.length > 0) {
+          if (Array.isArray(data.allowedUsers)) {
             referenceUsers = data.allowedUsers;
           }
           if (data.byPhone && typeof data.byPhone === "object") {
@@ -703,7 +696,7 @@
           }
         }
       } catch {
-        document.getElementById("errMsg").textContent = "Could not load remote data; using fallback reference list.";
+        document.getElementById("errMsg").textContent = "Could not load data from spreadsheet.";
       }
     }
 
@@ -725,9 +718,10 @@
       return;
     }
 
-    const phoneKey = normPhone(matched.phoneKey || matched.phone);
-    if (hasAlreadySpun(phoneKey)) {
+    const existing = findExistingAssignment(matched);
+    if (existing) {
       validateCurrentInput();
+      document.getElementById("errMsg").textContent = `You already assigned for ${existing.month}.`;
       return;
     }
 
@@ -737,6 +731,7 @@
       return;
     }
 
+    const phoneKey = normPhone(matched.phoneKey || matched.phone);
     const spinBtn = document.getElementById("spinBtn");
     spinBtn.disabled = true;
     spinBtn.textContent = "VERIFYING...";
@@ -757,8 +752,13 @@
         });
         const data = await res.json();
         if (!data || !data.ok || !data.month) {
-          document.getElementById("errMsg").textContent = (data && data.error) || "Spin rejected by database.";
+          if (data && data.byPhone) {
+            entriesByPhone = data.byPhone;
+            renderAssigned();
+            renderReferenceTable(matched);
+          }
           validateCurrentInput();
+          document.getElementById("errMsg").textContent = (data && data.error) || "Spin rejected by database.";
           return;
         }
         chosenMonth = data.month;
