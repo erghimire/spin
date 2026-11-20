@@ -523,12 +523,10 @@
   }
 
   function maskPhone(phone) {
-    const clean = normPhone(phone);
-    if (clean.length <= 4) return clean || "—";
-    if (clean.length <= 7) return clean.slice(0, 2) + "***" + clean.slice(-2);
-    return clean.slice(0, 4) + "***" + clean.slice(-3);
-  }
-
+  const clean = normPhone(phone);
+  if (!clean) return "—";
+  return clean.slice(0, 4) + "***";
+}
   function getEntries() {
     return Object.values(entriesByPhone || {});
   }
