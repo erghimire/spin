@@ -164,7 +164,11 @@
   }
 
   tr.ref-row:hover {
-    background: rgba(245, 158, 11, 0.1);
+    background: rgba(148, 163, 184, 0.08);
+  }
+
+  tr.ref-row.selected-row {
+    background: rgba(245, 158, 11, 0.12);
   }
 
   tr.ref-row.active-match {
@@ -381,7 +385,7 @@
     <header>
       <div>
         <h1>12-Month Lucky Draw</h1>
-        <p class="sub">Enter a Name and Phone Number matching the Reference Table to unlock the spin.</p>
+        <p class="sub">Type your own Name and Phone Number matching your reference entry to unlock the spin.</p>
       </div>
       <span class="badge" id="matchBadge">No Match</span>
     </header>
@@ -391,14 +395,14 @@
       <div class="stack">
         <div class="box">
           <div class="box-head">
-            <h2>Reference Table (Name & Phone)</h2>
+            <h2>Reference Table</h2>
             <span class="badge" id="refCount">0 entries</span>
           </div>
           <input
             type="text"
             class="search-input"
             id="refSearch"
-            placeholder="Filter reference table by name or phone..."
+            placeholder="Search reference table by name or last digits..."
             oninput="renderReferenceTable()"
           >
           <div class="table-wrap">
@@ -406,7 +410,7 @@
               <thead>
                 <tr>
                   <th>Name</th>
-                  <th>Phone Number</th>
+                  <th>Phone (Masked)</th>
                   <th>Status</th>
                 </tr>
               </thead>
@@ -432,22 +436,24 @@
 
         <div class="form-row">
           <div>
-            <label for="playerName">Name</label>
+            <label for="playerName">Your Name</label>
             <input
               type="text"
               class="entry-input"
               id="playerName"
-              placeholder="Enter exact name"
+              placeholder="Type your exact name"
+              autocomplete="off"
               oninput="validateCurrentInput()"
             >
           </div>
           <div>
-            <label for="playerPhone">Phone Number</label>
+            <label for="playerPhone">Your Phone Number</label>
             <input
               type="tel"
               class="entry-input"
               id="playerPhone"
-              placeholder="Enter phone number"
+              placeholder="Type your full phone number"
+              autocomplete="off"
               oninput="validateCurrentInput()"
             >
           </div>
@@ -501,6 +507,7 @@
 
   let referenceUsers = [];
   let entriesByPhone = {};
+  let selectedRowKey = "";
   let currentRotation = 0;
   let isSpinning = false;
   let pendingSpin = null;
@@ -515,6 +522,13 @@
     return s;
   }
 
+  function maskPhone(phone) {
+    const clean = normPhone(phone);
+    if (clean.length <= 4) return clean || "—";
+    if (clean.length <= 7) return clean.slice(0, 2) + "***" + clean.slice(-2);
+    return clean.slice(0, 4) + "***" + clean.slice(-3);
+  }
+
   function getEntries() {
     return Object.values(entriesByPhone || {});
   }
@@ -524,15 +538,16 @@
     return ALL_MONTHS.filter(m => !taken.has(m.toLowerCase()));
   }
 
+  // Matches ONLY when BOTH Name and Phone match the SAME reference record
   function findMatchedReference(rawName, rawPhone) {
     const nName = normName(rawName);
     const nPhone = normPhone(rawPhone);
     if (!nName || !nPhone) return null;
 
     return referenceUsers.find(u => {
-      const uPhone = normPhone(u.phoneKey || u.phone);
       const uName = normName(u.name);
-      return uPhone === nPhone && uName === nName;
+      const uPhone = normPhone(u.phoneKey || u.phone);
+      return uName === nName && uPhone === nPhone;
     }) || null;
   }
 
@@ -563,7 +578,7 @@
       spinBtn.disabled = true;
       spinBtn.textContent = "MATCH REFERENCE TO SPIN";
       if (rawName.trim() && rawPhone.trim()) {
-        errEl.textContent = "Name and phone number do not match the Reference Table.";
+        errEl.textContent = "Name and phone number must match the same reference record.";
       }
       return;
     }
@@ -575,7 +590,7 @@
       badge.className = "badge";
       spinBtn.disabled = true;
       spinBtn.textContent = "ALREADY ASSIGNED";
-      errEl.textContent = `${matched.name} (${matched.phone}) already spun and received ${existing.month}.`;
+      errEl.textContent = `${matched.name} (${maskPhone(matched.phone)}) already spun and received ${existing.month}.`;
       return;
     }
 
@@ -590,16 +605,20 @@
 
     badge.textContent = "Matched";
     badge.className = "badge matched";
-    okEl.textContent = `Verified: ${matched.name} (${matched.phone}) is eligible to spin.`;
+    okEl.textContent = `Verified: ${matched.name} (${maskPhone(matched.phone)}) is eligible to spin.`;
     spinBtn.disabled = false;
     spinBtn.textContent = "SPIN WHEEL";
   }
 
-  function fillFromReference(user) {
+  // Clicking a row ONLY highlights it; it never fills another person's details
+  function highlightReferenceRow(rowKey) {
     if (isSpinning) return;
-    document.getElementById("playerName").value = user.name || "";
-    document.getElementById("playerPhone").value = user.phone || "";
-    validateCurrentInput();
+    selectedRowKey = selectedRowKey === rowKey ? "" : rowKey;
+    const currentMatch = findMatchedReference(
+      document.getElementById("playerName").value,
+      document.getElementById("playerPhone").value
+    );
+    renderReferenceTable(currentMatch);
   }
 
   function renderReferenceTable(activeMatch = null) {
@@ -609,7 +628,13 @@
 
     const filtered = referenceUsers.filter(u => {
       if (!query) return true;
-      return normName(u.name).includes(query) || normPhone(u.phone).includes(query);
+      const fullPhone = normPhone(u.phoneKey || u.phone);
+      const masked = normName(maskPhone(u.phone));
+      return (
+        normName(u.name).includes(query) ||
+        fullPhone.includes(query) ||
+        masked.includes(query)
+      );
     });
 
     body.innerHTML = "";
@@ -620,15 +645,21 @@
 
     const activeKey = activeMatch ? normPhone(activeMatch.phoneKey || activeMatch.phone) : "";
 
-    filtered.forEach(u => {
-      const pKey = normPhone(u.phoneKey || u.phone);
+    filtered.forEach((u, idx) => {
+      const pKey = normPhone(u.phoneKey || u.phone) || `row-${idx}`;
       const done = hasAlreadySpun(pKey);
+      const isActive = pKey && pKey === activeKey;
+      const isSelected = pKey === selectedRowKey;
+
       const tr = document.createElement("tr");
-      tr.className = "ref-row" + (pKey && pKey === activeKey ? " active-match" : "");
-      tr.onclick = () => fillFromReference(u);
+      tr.className =
+        "ref-row" +
+        (isActive ? " active-match" : "") +
+        (isSelected ? " selected-row" : "");
+      tr.onclick = () => highlightReferenceRow(pKey);
       tr.innerHTML = `
         <td>${esc(u.name)}</td>
-        <td>${esc(u.phone)}</td>
+        <td>${esc(maskPhone(u.phone))}</td>
         <td><span class="status-pill ${done ? "status-done" : "status-ready"}">${done ? "Spun" : "Eligible"}</span></td>
       `;
       body.appendChild(tr);
@@ -650,7 +681,7 @@
       const li = document.createElement("li");
       li.className = "assigned-item";
       li.innerHTML = `
-        <span><strong>${idx + 1}.</strong> ${esc(item.name)} <span class="sub">(${esc(item.phone)})</span></span>
+        <span><strong>${idx + 1}.</strong> ${esc(item.name)} <span class="sub">(${esc(maskPhone(item.phone))})</span></span>
         <span class="month-tag">${esc(item.month)}</span>
       `;
       list.appendChild(li);
@@ -859,7 +890,7 @@
   }
 
   function openResultModal(entry) {
-    document.getElementById("modalSub").textContent = `${entry.name} • ${entry.phone}`;
+    document.getElementById("modalSub").textContent = `${entry.name} • ${maskPhone(entry.phone)}`;
     document.getElementById("modalMonth").textContent = String(entry.month).toUpperCase();
     document.getElementById("resultModal").style.display = "flex";
   }
